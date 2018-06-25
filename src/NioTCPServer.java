@@ -8,6 +8,25 @@ import java.nio.channels.SocketChannel;
 import java.text.DecimalFormat;
 import java.util.Iterator;
 
+/**
+ * 服务器发送给设备：24
+ * 设备回复给服务器：44
+ * 
+ * 无线id ：不唯一
+ * 设备标识：唯一
+ * 设备类型
+ * 数据：数据有一个字段的，有两个字段的
+ * 
+ * 红外入侵传感器对应表   ：InvadeData ：设备类型：0x10
+ * 空气温湿度传感器对应表：AirData    ：设备类型：0xB3
+ * 光照强度传感器对应表    ：BeamData   ：设备类型：0xC0
+ * 二氧化碳传感器对应表    ：CO2Data    ：设备类型：0xD0
+ * 土壤温湿度传感器对应表：SoilData   ：设备类型：0xA5
+ * @author YangKuan
+ *
+ */
+
+
 public class NioTCPServer {	
 	//缓冲区长度
 	private static final int BUFSIZE = 1024;
@@ -33,7 +52,6 @@ public class NioTCPServer {
 			//一直等待，直到有通道准备好了数据的传输，在此处异步执行其他任务（3000为select方法等待信道准备好的最长时间）
 			if (selector.select(3000) == 0) {
 				//异步执行其他任务
-				System.out.println("======");
 				continue;
 			}
 			//获取准备好的通道中关联的Key集合的Iterator
@@ -44,7 +62,6 @@ public class NioTCPServer {
 				//服务端对哪种信号感兴趣就执行那种操作
 				if(key.isAcceptable()) {
 					System.out.println("accept");
-					
 					//连接好了，然后将读注册到选择器中
 					readRegister(selector,key);
 				}
@@ -101,7 +118,6 @@ public class NioTCPServer {
             	//dataByte = toByteArray(dataString);
             	//②发送至客户端
             	sentDataClient(socketChannel, dataString);
-            	
             	}
             byteBuffer.clear();
         }
@@ -123,26 +139,71 @@ public class NioTCPServer {
 		if(!str.equals("44")) {
 			return;
 		}
-		System.out.println("进行数据存储");
 		//将设备返回的数据直接存储（存储在devdata表中）
-		ConnectionMysql.insertDEVData(dataString);
+		//ConnectionMysql.insertDEVData(dataString);
 		//拆分数据
 		String[] dataStr = splitData(dataString);
 		//解析数据
-		if(dataStr.length ==4 ) {
-			
-		}else if(dataStr.length == 5){
-			dataStr = resolveData(dataStr);
+		if(dataStr.length ==4 ) {//解析其他的数据
+			dataStr = resolveOtherData(dataStr);
+		}else if(dataStr.length == 5){//解析空气和土壤的数据
+			dataStr = resolveAirAndSoilData(dataStr);
 		}else {
 			System.err.println("错误");
 		}
+		//改进：这儿直接调用保存方法（在保存方法中依据不同的设备类型放入不同的表中）
+		insert(dataStr);
+		
+		//打印需要保存的数据
+		printData(dataStr);
+		
 		//将解析后的数据存储（存储在data表中）
-		ConnectionMysql.insertData(dataStr);
+		//ConnectionMysql.insertData(dataStr);
 		//查询数据
-    	ConnectionMysql.selectData();
+    	//ConnectionMysql.selectData();
+	}
+	
+	public static void printData(String[] dataStr) {
+		for(String str : dataStr){
+			System.err.println(str);
+		}
 	}
 	
 	/**
+	 * 将不同数据保存至不同表
+	 * 红外入侵传感器对应表   ：invade_data ：设备类型：0x10
+	 * 空气温湿度传感器对应表：air_data    ：设备类型：0xB3
+	 * 光照强度传感器对应表    ：beam_data   ：设备类型：0xC0
+	 * 二氧化碳传感器对应表    ：co2_data    ：设备类型：0xD0
+	 * 土壤温湿度传感器对应表：soil_data   ：设备类型：0xA5
+	 * 所有设备都会变成小写
+	 * @param dataStr
+	 */
+	public static void insert(String[] dataStr) {
+		switch (dataStr[2]) {
+		case "10":
+			//invade_data
+			break;
+		case "b3":
+			//air_data
+			break;
+		case "c0":
+			//beam_data
+			break;
+		case "d0":
+			//co2_data
+			break;
+		case "a5":
+			//soil_data
+			break;
+		default:
+			break;
+		}
+	}
+	
+	
+	/**
+	 * 空气或土壤数据的解析
 	 * 解析最后一个数据
 	 * 温湿度（包含三个byte）
 	 * 示例：31 02 1C
@@ -153,7 +214,7 @@ public class NioTCPServer {
 	 * @param dataStr
 	 * @return
 	 */
-	public static String[] resolveData(String[] dataStr) {
+	public static String[] resolveAirAndSoilData(String[] dataStr) {
 		//温度换算
 		String temperature = dataStr[dataStr.length-2].substring(2, 4) + dataStr[dataStr.length-2].substring(0, 2);
 		//保留一位小数
@@ -162,6 +223,7 @@ public class NioTCPServer {
 		String temFormatStr = dFormat.format((double)Integer.parseInt(temperature,16)/10);
 		double t = Double.parseDouble(temFormatStr) - 40;
 		temFormatStr = String.valueOf(t)+"°C";
+		
 		//湿度转换
 		String humidity = dataStr[dataStr.length-1].substring(0, 2);
 		//将16进制字符串转换为10进制
@@ -173,7 +235,37 @@ public class NioTCPServer {
 	}
 	
 	/**
-	 * 拆分数据
+	 * 解析其他数据(红外入侵，光照强度，二氧化碳，数据转换成16进制)
+	 * 红外入侵传感器对应表   ：invade_data ：设备类型：0x10
+	 * 光照强度传感器对应表    ：beam_data   ：设备类型：0xC0
+	 * 二氧化碳传感器对应表    ：co2_data    ：设备类型：0xD0
+	 * @param dataStr
+	 * @return
+	 */
+	public static String[] resolveOtherData(String[] dataStr) {
+		switch (dataStr[2]) {
+		case "10"://红外入侵
+			dataStr[3] = Integer.parseInt(dataStr[3], 16) + "";
+			break;
+		case "b3"://光照强度
+			String beamStr = dataStr[3].substring(2, 4) + dataStr[3].substring(0, 2);
+			dataStr[3] = Integer.parseInt(beamStr, 16) + "Lux";
+			break;
+		case "d0"://二氧化碳
+			String co2 = dataStr[3].substring(2, 4) + dataStr[3].substring(0, 2);
+			dataStr[3] = Integer.parseInt(co2, 16) + "ppm";
+			break;
+		default:
+			break;
+		}
+		return dataStr;
+	}
+	
+	/**
+	 * 拆分数据(前三个数据是不变的，因此可以将前个数据提取出来)
+	 * 第0个数据：无线id
+	 * 第1个数据：设备标识
+	 * 第2个数据：设备类型
 	 * 
 	 * @return
 	 */
@@ -185,12 +277,36 @@ public class NioTCPServer {
 		}else {
 			dataStr = new String[5];
 		}
+		splitData1(dataStr,dataString);
+		splitData2(dataStr,dataString);
 		
+		
+		return dataStr;
+	}
+	//拆分前三个数据
+	public static String[] splitData1(String[] dataStr, String dataString) {
 		dataStr[0] = dataString.substring((5-1)*2, (5-1+2)*2);
 		dataStr[1] = dataString.substring((7-1)*2, (7-1+12)*2);
 		dataStr[2] = dataString.substring((21-1)*2, (21-1+1)*2);
-		dataStr[3] = dataString.substring((23-1)*2, (23-1+2)*2);
-		dataStr[4] = dataString.substring((25-1)*2, (dataString.length()/2-1)*2);
+		return dataStr;
+	}
+	//拆分后面的数据
+	public static String[] splitData2(String[] dataStr, String dataString) {
+		int len = dataString.length() / 2;
+		if(dataStr.length == 4) {
+			//判断，因为字段为4个的数据域的位也有不同
+			if(len == 24) {//长度是24个16进制数（截取倒数第2个）
+				dataStr[3] = dataString.substring((len - 2) * 2, (len - 1) * 2);
+			}else if(len == 25){//长度为25个16进制数(所以截取倒数第2和第3位)
+				dataStr[3] = dataString.substring((len - 3) * 2, (len - 1) * 2);
+			}
+		}else if(dataStr.length == 5){//截取倒数第3 4个，截取倒数第2个
+			dataStr[3] = dataString.substring((len - 4) * 2, (len - 2) * 2);
+			dataStr[4] = dataString.substring((len - 2) * 2, (len - 1) * 2);
+		}else {
+			System.out.println("异常");
+		}
+		
 		return dataStr;
 	}
 	
